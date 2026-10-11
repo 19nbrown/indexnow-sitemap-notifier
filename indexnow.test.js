@@ -1,0 +1,38 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {allowedPublicUrl,sitemapUrls,pageFingerprint,notifyIndexNow} from './indexnow.js';
+const origin = 'https://example.com';
+for (const suffix of ['/account','/api/jobs/abc','/media/originals/abc','/examples/media/test.webp','/blog/example?token=secret','/blog/example#secret','/blog/a/b']) assert.equal(allowedPublicUrl(origin+suffix,origin),false);
+assert.equal(allowedPublicUrl('https://evil.example/blog/example',origin),false);
+assert.equal(allowedPublicUrl(origin+'/blog/example-article',origin),true);
+const xml = '<urlset><url><loc>'+origin+'/blog/example</loc><image:loc>'+origin+'/examples/media/test.webp</image:loc></url><url><loc>'+origin+'/account</loc></url></urlset>';
+assert.deepEqual(sitemapUrls(xml,origin),[origin+'/blog/example']);
+const html = content=>`<html><head><title>Example blog</title><link rel="canonical" href="${origin}/blog/example"></head><body><main>${content}</main></body></html>`;
+const headers = new Headers({'content-type':'text/html'});
+assert.equal(pageFingerprint(html('hello').replace('</head>','<meta content="noindex,follow" name="robots"></head>'),headers,origin+'/blog/example'),null);
+assert.equal(pageFingerprint(html('hello'),new Headers({'x-robots-tag':'noindex'}),origin+'/blog/example'),null);
+assert.equal(pageFingerprint(html('hello'),headers,origin+'/about'),null);
+assert.equal(pageFingerprint(html('hello<script>random=1</script>'),headers,origin+'/blog/example'),pageFingerprint(html('hello<script>random=2</script>'),headers,origin+'/blog/example'));
+const dir = await fs.mkdtemp(path.join(os.tmpdir(),'igs-indexnow-test-'));
+const keyFile = path.join(dir,'key.txt'); await fs.writeFile(keyFile,'TESTKEY23456789');
+let content = 'First public page'; let responseStatus = 202; const posts = [];
+const fetcher = async (url,options={}) => {
+  if (url.endsWith('/sitemap.xml')) return new Response(xml);
+  if (url === origin+'/indexnow-key.txt') return new Response('TESTKEY23456789');
+  if (url === 'http://127.0.0.1:3180/blog/example') return new Response(html(content),{headers});
+  if (url === 'https://api.indexnow.org/indexnow') { posts.push(JSON.parse(options.body)); return new Response('',{status:responseStatus}); }
+  throw new Error('Unexpected request '+url);
+};
+const options = {siteUrl:origin,dataDir:dir,keyFile,fetcher};
+assert.equal((await notifyIndexNow({...options,dryRun:true})).changed,1); assert.equal(posts.length,0);
+assert.equal((await notifyIndexNow(options)).submitted,1); assert.equal(posts.length,1);
+assert.deepEqual(posts[0].urlList,[origin+'/blog/example']);
+assert.equal((await notifyIndexNow(options)).submitted,0); assert.equal(posts.length,1);
+content = 'Updated public content'; responseStatus = 429;
+await assert.rejects(notifyIndexNow(options),/HTTP 429/);
+responseStatus = 200;
+assert.equal((await notifyIndexNow(options)).submitted,1);
+assert.equal((await notifyIndexNow(options)).submitted,0);
+console.log('PASS: private URL exclusion, same-host enforcement, media exclusion, noindex/canonical checks, content hashing, dry run, accepted submissions, unchanged deduplication and failed-submission retry.');

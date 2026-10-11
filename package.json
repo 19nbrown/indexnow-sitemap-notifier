@@ -1,0 +1,10 @@
+{
+  "name": "indexnow-sitemap-notifier",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "preview": "node indexnow.js --dry-run",
+    "submit": "node indexnow.js",
+    "test": "node indexnow.test.js"
+  }
+}
